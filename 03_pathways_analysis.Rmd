@@ -1,0 +1,446 @@
+---
+title: "Unveiling the impact of bacteriophages targeting Shiga toxin-encoding Escherichia coli on the colon microbiome in vitro fermentation"
+subtitle: "Pathway analysis"
+author: "Sudarshan and Graça Pinto"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+    code_folding: hide  
+editor_options: 
+  chunk_output_type: console
+---
+
+## A brief overview of the experiment  
+Fecal samples were collected from three individuals. *In-vitro* fermentation experiment was carried out in duplicates for each condition:  
+*  Control (No treatment)                           
+*  Perturbation with E.coli bolus      
+*  Perturbation with Phage           
+*  Perturbation with Phage and E.coli   
+
+We investigate effect of these on microbiota function using wgs metagenomics.  
+Compositional investigation was done using two tools:  
+*  Humann2  https://huttenhower.sph.harvard.edu/humann2   
+
+
+# Pre-process  
+## Load libraries  
+
+```{r message=FALSE}
+library( tidyverse)
+library(vegan)
+library(broom)
+library(ggpubr)
+library(microbiome)
+library(microbiomeutilities)
+library(reshape2)
+library(dplyr)
+library(pheatmap)
+library(patchwork)
+```
+
+
+## Read in the metadata   
+```{r}
+#metadata
+meta_tab <- read.table(file = "data/metadata_v1.txt", 
+                       header = T, quote = "", sep = "\t", 
+                       stringsAsFactors = F)
+rownames(meta_tab) <- meta_tab$AssayIdentifier
+meta_tab <- na.omit(meta_tab)
+
+STUDY <- c("D1", "D1", "D1", "D1", "D1", "D1", "D1", "D1",
+           "D2", "D2", "D2", "D2", "D2", "D2", "D2", "D2",
+           "D3", "D3", "D3", "D3", "D3", "D3", "D3", "D3")
+meta_tab$STUDY <- STUDY
+
+meta_tab$Perturbation <-  gsub( "Perturbation ", "",meta_tab$Condition)
+#head(meta_tab)
+```
+
+## Read in the normalized pathways file
+
+```{r message=FALSE}
+#Read in the normalized pathways file
+humann2_pathways <- as.data.frame(read_tsv("data/raw/humann2/humann2_pathabundance.tsv"))
+
+#head(humann2_pathways)
+
+```
+
+
+## Make phyloseq   
+
+```{r}
+#Re-format the data from wide to long format
+humann2_pathways_long <- 
+  # %>% is used to pipe the output to the next command
+  humann2_pathways %>% 
+  #Rename  `# Pathway` as pathway
+  rename(pathway = `# Pathway`) %>%
+  #Gather cmp by pathway and sampleID
+  gather(sampleID, cpm, -pathway) %>% 
+  #Separate by sampleID and drop any extra values without warning
+  separate(sampleID, "sampleID", sep = "_", extra = "drop") %>% 
+  #Separate pathways from organisms using |
+  separate(pathway, c("pathway", "organism"), sep = "\\|", fill = "right") %>% 
+  filter(is.na(organism)) %>%
+  # remove organism linkage
+  select(-organism) %>%
+  # remove unclassified/unmapped/unintegrated
+  filter(!(grepl("^UN", pathway))) 
+
+#head(humann2_pathways_long)
+```
+
+## Build phyloseq    
+```{r}
+# convert to matrix 
+path_abund <- humann2_pathways_long %>% 
+  group_by(pathway, sampleID) %>% 
+  summarise(cpm = sum(cpm)) %>% 
+  pivot_wider(id_cols = pathway, names_from = sampleID, values_from = cpm) %>% 
+  as.data.frame()
+
+rownames(path_abund) <- path_abund$pathway
+path_abund <- path_abund[,-1]
+
+head(path_abund)
+
+ps_path <- merge_phyloseq(otu_table(path_abund,taxa_are_rows= T),
+                          sample_data(meta_tab))
+saveRDS(ps_path, "data/rds/ps_path.rds")
+```
+
+# Analysis  
+
+## Top 25 pathways  
+Select top 25 pathways  
+```{r}
+mycols <- list(Perturbation=c(Control= "brown3", 
+            E.coli= "steelblue",
+            Phage = "grey50", 
+            Phage_E.coli = "#7c65a9"),
+            STUDY = c(D1 = "#81b29a",
+            D2 = "#e07a5f",
+            D3 = "#f2cc8f"))
+
+sample_data(ps_path)$Perturbation <-  gsub( "Perturbation ", "",sample_data(ps_path)$Condition)
+
+top_25 <- top_taxa(ps_path, 25)
+ps_path_fi <- prune_taxa(top_25, ps_path)
+
+```
+
+### Heatmap
+```{r}
+pheatmap(abundances(ps_path_fi), cluster_cols = T, 
+         annotation_col =  meta(ps_path)[,c("STUDY","Perturbation")],
+         annotation_colors=mycols,
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "correlation",
+         main = "Clustering by Pearson's Correlation",
+         filename = "03_pathways/figs/top25_pathways.pdf",
+         height = 10, width = 16)
+
+pheatmap(abundances(ps_path_fi), cluster_cols = T, 
+         annotation_col =  meta(ps_path)[,c("STUDY","Perturbation")],
+         annotation_colors=mycols,
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "correlation",
+         main = "Clustering by Pearson's Correlation",
+         filename = "03_pathways/figs/top25_pathways.png",
+         height = 10, width = 16, dpi = 300)
+```
+
+
+## Compare composition and function   
+
+### Function  
+```{r fig.height= 5, fig.width=8}
+mycols2 <- c(Control= "brown3", 
+            E.coli= "steelblue",
+            Phage = "grey50", 
+            Phage_E.coli = "#7c65a9")
+
+
+# Ordinate the data
+set.seed(42351)
+# proj <- get_ordination(pseq, "MDS", "bray")
+ord.path1 <- ordinate(ps_path, "MDS", "bray")
+p.ord.path1 <- plot_ordination(ps_path, ord.path1, color = "Perturbation",
+                shape = "STUDY") +
+                geom_point(size = 5, alpha=0.25) + 
+  scale_color_manual(values = mycols2) + 
+  theme_biome_utils() + ggtitle("Pathways")
+p.ord.path1
+ggsave("03_pathways/figs/Beta_pathway1.pdf")
+ggsave("03_pathways/figs/Beta_pathway1.png")
+
+p.ord.path.new1 <- plot_ordination(ps_path, ord.path1, color = "Perturbation",
+                shape = "STUDY") +
+                geom_point(size = 5, alpha=0.25) + 
+  scale_color_manual(values = mycols2) + 
+  theme_biome_utils()
+
+
+#statistical analysis PERMANOVa significance test for group-level differences
+#for Humann2 data
+permanova.2 <- adonis(t(path_abund) ~ STUDY,
+               data = meta_tab, permutations=99, method = "bray")
+
+# P-value
+print(as.data.frame(permanova.2$aov.tab)["STUDY", "Pr(>F)"])
+
+```
+
+### Composition   
+```{r}
+
+ps.mpn <- readRDS("data/rds/ps.mpn.rds")
+# Ordinate the data
+sample_data(ps.mpn)$Perturbation <-  gsub( "Perturbation ", "",sample_data(ps.mpn)$Condition)
+ord.mpn1 <- ordinate(ps.mpn, "MDS", "bray")
+p.ord.mpn1 <- plot_ordination(ps.mpn, ord.mpn1, color = "Perturbation",
+                shape = "STUDY") +
+                geom_point(size = 5, alpha=0.25) + 
+  scale_color_manual(values = mycols2) + 
+  theme_biome_utils() + ggtitle("Composition")
+
+p.ord.mpn.new1 <- plot_ordination(ps.mpn, ord.mpn1, color = "Perturbation",
+                shape = "STUDY") +
+                geom_point(size = 5, alpha=0.25) + 
+  scale_color_manual(values = mycols2) + 
+  theme_biome_utils()
+
+```
+
+
+```{r fig.height=5, fig.width=12}
+p.ord.mpn1 | p.ord.path1 + plot_layout(guides = "collect")
+p.ord.mpn1
+ggsave("03_pathways/figs/pathwaysandcomposition1.pdf", h=4, w=10)
+
+Combinebetaplot1 <- ggarrange(p.ord.mpn.new1, p.ord.path.new1,
+                         labels = c("A", "B"),
+                         ncol = 2, nrow = 1,
+                         common.legend = TRUE, legend = "right")
+Combinebetaplot1
+ggsave("03_pathways/figs/beta_metaphln_path1.pdf", height =5, width = 10)
+ggsave("03_pathways/figs/beta_metaphln_path1.png", height = 5, width = 10, dpi=300)
+```
+
+## Mantel test  
+```{r}
+pwy.dist <- distance(ps_path, method = "bray")
+abd.dist <- distance(ps.mpn, method = "bray")
+
+mantel.pwy.abd <- vegan::mantel(pwy.dist,abd.dist, permutations = 999)
+mantel.pwy.abd
+```
+
+The Pearson's product-moment correlation between pathway and composition is `r round(mantel.pwy.abd$statistic, 3)` and p-value is `r mantel.pwy.abd$signif`   
+
+The composition and function have a good correlation in sample dissimilarities.  
+
+# Species contributions  
+
+```{r}
+humann2_pathways <- as.data.frame(read_tsv("data/raw/humann2/humann2_pathabundance.tsv"))
+colnames(humann2_pathways)[1] <- "feature"
+colnames(humann2_pathways) <- sub("\\_.*", "", colnames(humann2_pathways))
+
+pwy_tbs_ab <- humann2_pathways %>% 
+  separate(feature, c("feature", "organism"), sep = "\\|", fill = "right") %>% 
+  filter(!is.na(organism)) %>% 
+  unite(col= "feature_organism",c("feature", "organism"),sep = "|")
+
+head(pwy_tbs_ab)
+```
+
+### Create a main tibble  
+```{r}
+humann2_pathways_abund <- 
+  # %>% is used to pipe the output to the next command
+  pwy_tbs_ab %>% 
+  #Rename  `# Pathway` as pathway
+  rename(pathway = feature_organism) %>%
+  #Gather cmp by pathway and sampleID
+  gather(sampleID, cpm, -pathway) %>% 
+  #Separate by sampleID and drop any extra values without warning
+  separate(sampleID, "sampleID", sep = "_", extra = "drop") %>% 
+  #Separate pathways from organisms using |
+  separate(pathway, c("pathway", "organism"), sep = "\\|", fill = "right")
+```
+
+## Create metadata  
+
+```{r}
+meta_tab <- meta_tab %>% 
+  tibble::rownames_to_column("sampleID")
+meta_tab$Perturbation <-  gsub( "Perturbation ", "",meta_tab$Condition)
+```
+
+
+### PWY-6737: starch degradation V  
+```{r fig.width=12, fig.height=6}
+
+starch1 <- 
+  humann2_pathways_abund %>% 
+  filter(pathway == "PWY-6737: starch degradation V") %>% 
+  group_by(pathway, organism, sampleID) %>% 
+  summarise(cpm = sum(cpm)) %>% 
+  filter(!is.na(organism)) %>% 
+  separate(organism, c("Genus", "Species"), sep = "\\.", fill = "right") %>% 
+  mutate(Species = ifelse(is.na(Species), Genus, Species)) %>% 
+  filter(Species!="unclassified")
+
+starch1$Species <- sub("s__", "", starch1$Species)
+
+lst <- starch1 %>% 
+  group_by(Species) %>% summarise(mean=mean(cpm)) %>% 
+  arrange(desc(mean)) 
+
+num.bugs = 9
+top_sel <- lst$Species[1:num.bugs]
+
+
+starch1 <- starch1 %>% 
+  mutate(`Top taxa`= factor(ifelse(Species %in% top_sel, Species, "Other"))) %>% 
+  left_join(meta_tab, by= "sampleID") %>% 
+  filter(!is.na(Perturbation))
+
+
+p <- ggplot(starch1, 
+            aes(x = sampleID,y = cpm,
+                fill = `Top taxa`)) +
+  geom_bar(stat = "identity") + 
+  facet_grid(~Perturbation, scales = "free") + 
+  theme_biome_utils() +
+  theme(axis.title.x = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(angle=90),
+        #axis.text.x = ggplot2::element_blank(),
+        #axis.ticks.x = ggplot2::element_blank(),
+        strip.background = ggplot2::element_blank(),
+        strip.text = element_text(size = 10),
+        #panel.border = element_blank(),
+        panel.grid = element_blank(),
+        panel.spacing = unit(0, "line")) +
+  scale_fill_brewer(palette = "Paired") +
+  ylab("Counts per million") + xlab("") +
+  labs(subtitle = "PWY-6737: starch degradation V")
+p
+
+ggsave("03_pathways/figs/starch_path.pdf", height =5, width = 10)
+ggsave("03_pathways/figs/starch_path.png", height = 5, width = 10, dpi=300)
+
+```
+
+
+### PWY−7219: adenosine ribonucleotides de novo biosynthesis  
+```{r fig.width=12, fig.height=6}
+
+PWY_7219 <-  humann2_pathways_abund %>% 
+  filter(pathway == "PWY-7219: adenosine ribonucleotides de novo biosynthesis") %>% 
+  group_by(pathway, organism, sampleID) %>% 
+  summarise(cpm = sum(cpm)) %>% 
+  filter(!is.na(organism)) %>% 
+  separate(organism, c("Genus", "Species"), sep = "\\.", fill = "right") %>% 
+  mutate(Species = ifelse(is.na(Species), Genus, Species)) %>% 
+  filter(Species!="unclassified")
+
+PWY_7219$Species <- sub("s__", "", PWY_7219$Species)
+
+lst <- PWY_7219 %>% 
+  group_by(Species) %>% summarise(mean=mean(cpm)) %>% 
+  arrange(desc(mean)) 
+
+num.bugs = 9
+top_sel <- lst$Species[1:num.bugs]
+
+PWY_7219 <- PWY_7219 %>% 
+  mutate(`Top taxa`= factor(ifelse(Species %in% top_sel, Species, "Other"))) %>% 
+  left_join(meta_tab, by= "sampleID") %>% 
+  filter(!is.na(Condition))
+
+
+p7219 <- ggplot(PWY_7219, 
+            aes(x = sampleID,y = cpm,
+                fill = `Top taxa`)) +
+  geom_bar(stat = "identity") + 
+  facet_grid(~Condition, scales = "free") + 
+  theme_biome_utils() +
+  theme(axis.title.x = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(angle=90),
+        #axis.text.x = ggplot2::element_blank(),
+        #axis.ticks.x = ggplot2::element_blank(),
+        strip.background = ggplot2::element_blank(),
+        strip.text = element_text(size = 10),
+        #panel.border = element_blank(),
+        panel.grid = element_blank(),
+        panel.spacing = unit(0, "line")) +
+  scale_fill_brewer(palette = "Paired") +
+  ylab("Counts per million") + xlab("") +
+  labs(subtitle = "PWY−7219: adenosine ribonucleotides de novo biosynthesis")
+p7219
+
+```
+
+
+### Contribution of Bifidobacterium_adolescentis   
+```{r fig.width=16, fig.height=6}
+
+bfidAdo <-  humann2_pathways_abund %>% 
+  #filter(pathway == "PWY-7219: adenosine ribonucleotides de novo biosynthesis") %>% 
+  group_by(pathway, organism, sampleID) %>% 
+  summarise(cpm = sum(cpm)) %>% 
+  filter(!is.na(organism)) %>% 
+  separate(organism, c("Genus", "Species"), sep = "\\.", fill = "right") %>% 
+  mutate(Species = ifelse(is.na(Species), Genus, Species)) %>% 
+  filter(Species!="unclassified") %>% 
+  filter(!(grepl("^UN", pathway)))
+  
+bfidAdo$Species <- sub("s__", "", bfidAdo$Species)
+
+bfidAdo <- bfidAdo %>% 
+  filter(Species == "Bifidobacterium_adolescentis")
+
+
+
+lst <- bfidAdo %>% 
+  group_by(pathway) %>% summarise(mean=mean(cpm)) %>% 
+  arrange(desc(mean)) 
+
+num.pwy = 9
+top_pwy <- lst$pathway[1:num.pwy]
+
+bfidAdo <- bfidAdo %>% 
+  mutate(`Top pathway`= factor(ifelse(pathway %in% top_pwy, pathway, "Other"))) %>% 
+  left_join(meta_tab, by= "sampleID") %>% 
+  filter(!is.na(Condition))
+
+
+p.bfidAdo <- ggplot(bfidAdo, 
+            aes(x = sampleID,y = cpm,
+                fill = `Top pathway`)) +
+  geom_bar(stat = "identity") + 
+  facet_grid(~Condition, scales = "free") + 
+  theme_biome_utils() +
+  theme(axis.title.x = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(angle=90),
+        #axis.text.x = ggplot2::element_blank(),
+        #axis.ticks.x = ggplot2::element_blank(),
+        strip.background = ggplot2::element_blank(),
+        strip.text = element_text(size = 10),
+        #panel.border = element_blank(),
+        panel.grid = element_blank(),
+        panel.spacing = unit(0, "line")) +
+  scale_fill_brewer(palette = "Paired") +
+  ylab("Counts per million") + xlab("") +
+  labs(subtitle = "Bifidobacterium_adolescentis")
+p.bfidAdo
+
+```
+
