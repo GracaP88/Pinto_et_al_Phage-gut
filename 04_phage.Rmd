@@ -1,0 +1,150 @@
+---
+title: "Unveiling the impact of bacteriophages targeting Shiga toxin-encoding Escherichia coli on the colon microbiome in vitro fermentation"
+subtitle: "Mapping to pangenome of phage Ace"
+author: "Sudarshan and Graça Pinto"
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+    code_folding: hide  
+editor_options: 
+  chunk_output_type: console
+---
+
+
+# Phage Ace genome mapping to reads
+The presence of the pangenome of phage Ace was assess thorough the sequencing reads. The pangenome was obtained using the Bowtie2 pipeline, and the mapping was performed using the pipeline HTseq. This was performed in a Linux server. 
+
+##load the packages
+```{r load-libs, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(microbiomeutilities)
+```
+
+# Imput the data to R and make a file containing the number of reads that mapped to phage Ace pangenome.
+```{r}
+# folder with all sam files from HTseq
+Ace_files_sam <- list.files("data/raw/mapping/phage/")
+Ace_files_sam_path <- paste0("data/raw/mapping/phage/",Ace_files_sam)
+
+#A function to read one of the count files produced by HTSeq
+Ace_read.sample <- function(Ace_files_sam) {
+  #file.name <- paste(files_sam, "", sep="")
+  result1 <- read.delim(Ace_files_sam, col.names=c("gene", "count"), stringsAsFactors = FALSE, 
+                       header = F, colClasses=c("character", "numeric"))
+  }
+
+#all.data <- sample.1
+
+sample_ace.2 <- Ace_read.sample(Ace_files_sam_path[1])
+all_ace.data <- sample_ace.2
+for (c in 2:length(Ace_files_sam_path)) {
+  temp_ace.data <- Ace_read.sample (Ace_files_sam_path[c])
+  all_ace.data <- cbind(all_ace.data, temp_ace.data$count)
+}
+#head(all_ace.data)
+
+Ace_files_sam_clean <- gsub("t24_map.sam","",Ace_files_sam)
+colnames(all_ace.data) <- c("gene", Ace_files_sam_clean)
+#head(all_ace.data)
+#tail(all_ace.data)
+all_ace.data$gene <- gsub("gene-","",all_ace.data$gene)
+
+all_ace.data.melt <- reshape2::melt(all_ace.data)
+#head(all_ace.data.melt)
+write.csv(all_ace.data, "04_phage/mapping_of_ace.csv")
+```
+
+# removing data that are not aligned, etc.
+```{r}
+all_ace.data.melt <- all_ace.data.melt %>% 
+  mutate(gene_id= ifelse(gene=="__no_feature", "Other",
+                         ifelse(gene=="__ambiguous", "Other",
+                         ifelse(gene=="__too_low_aQual", "Other",
+                         ifelse(gene=="__not_aligned", "Other",
+                         ifelse(gene=="__alignment_not_unique", "Other", gene))))))
+#tail(all.data.melt)
+
+all_ace.data.melt_2 <- all_ace.data.melt %>% 
+  mutate(type_id= ifelse(gene_id=="Other", "Other", "ex_gene"))
+
+all_ace.data.sum <- all_ace.data.melt_2 %>% 
+  group_by(type_id, variable) %>% 
+  summarise(sum_val = sum(value))
+
+all_ace.data.sum.wd <- all_ace.data.sum %>% 
+  pivot_wider(id_cols = variable, names_from=type_id, values_from="sum_val") %>% 
+  mutate(frac_reads = ex_gene/Other)
+all_ace.data.sum.wd
+
+all_ace.data.sum.wd1<-all_ace.data.sum.wd
+
+```
+
+```{r}
+#metafile and Re-order the columns to that they correspond to the order of samples in df.meta
+df.meta <- read.table(file = "data/metadata_v1.txt", 
+                        header = T, 
+                        quote = "", 
+                        sep = "\t", stringsAsFactors = F)
+df.meta <- as.data.frame(df.meta)
+
+rownames(df.meta) <- df.meta$AssayIdentifier
+
+study <- c("D1", "D1", "D1", "D1", "D1", "D1", "D1", "D1",
+           "D2", "D2", "D2", "D2", "D2", "D2", "D2", "D2",
+           "D3", "D3", "D3", "D3", "D3", "D3", "D3", "D3")
+df.meta$study <- study
+
+df.meta$Perturbation <-  gsub( "Perturbation ", "",df.meta$Condition)
+
+rownames(all_ace.data.sum.wd1) <- all_ace.data.sum.wd1$variable
+all_ace.data.sum.wd1 <- all_ace.data.sum.wd1[row.names(df.meta),]
+```
+
+
+
+```{r fig.width=6, fig.height=4}
+#add extra columns
+all_ace.data.sum.wd1$Perturbation <- df.meta$Perturbation
+all_ace.data.sum.wd1$study <- df.meta$study
+
+p <- ggplot(all_ace.data.sum.wd1, aes(x=Perturbation , y=ex_gene)) +
+  geom_point(aes(shape=study, colour=study), size=5, alpha=0.5) + 
+  theme_biome_utils() + 
+  theme_bw() + 
+  scale_x_discrete(labels=c("Control","E.coli", "Phage", "Phage_E.coli")) + 
+  ylab("HTSeq read counts (log10)") +
+  labs(subtitle = "Mapping of reads to pangenome of phage Ace")
+plot(p)
+
+ggsave("04_phage/figs/HTseq out Ace.pdf",  height = 4, width = 6)
+ggsave("04_phage/figs/HTseq out Ace.png",  height = 4, width = 6, dpi = 300)
+
+```
+
+For more clear impact visualization 
+
+```{r fig.width=8, fig.height=4}
+boxp1 <- ggplot(all_ace.data.sum.wd1, aes(x=Perturbation , y=ex_gene)) +
+  geom_boxplot(aes()) +
+  geom_point(shape=21, size=2) +
+  scale_y_log10() + 
+  theme_biome_utils() + 
+  scale_x_discrete(labels=c("Control","E.coli", "Phage", "Phage_E.coli")) + 
+  ylab("HTSeq read counts (log10)") + 
+  facet_wrap(~study) +
+  theme(axis.text.x = element_text(angle=90))
+
+print(boxp1)
+ggsave("04_phage/figs/HTseq out Ace box.pdf",  height = 4, width = 6)
+ggsave("04_phage/figs/HTseq out Ace box.png",  height = 4, width = 6, dpi = 300)
+
+```
+
+
+Here, we see a clear fold increase in phage reads indicating that phage abundance increased because it had the host to undergo lytic cycle
