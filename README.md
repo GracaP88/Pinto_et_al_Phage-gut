@@ -16,4 +16,4 @@ $Present Address: Department of Medical Microbiology and Infection Prevention, U
 
 For queries about codes and analysis: Graça Pinto gracapinto[at]ceb[dot]uminho[dot]com
 
-A workflowr project.
+A workflow project.
