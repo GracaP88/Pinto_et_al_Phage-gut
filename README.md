@@ -1,5 +1,7 @@
 # Phage-gut
-An in vitro fermentation model to study the impact of bacteriophages targeting Shiga toxin-encoding Escherichia coli on the colon microbiota (unplublished)
+An in vitro fermentation model to study the impact of bacteriophages targeting Shiga toxin-encoding Escherichia coli on the colonic microbiota
+npj Biofilms and Microbiomes (2022)
+https://doi.org/10.1038/s41522-022-00334-
 
 Graça Pinto<sup>1,2,3</sup>, Sudarshan Shetty<sup>2$</sup>, Erwin G. Zoetendal<sup>2</sup>, Raquel F.S. Gonçalves<sup>1</sup>, Ana C. Pinheiro<sup>1</sup>, Carina Almeida<sup>1,3,4</sup>, Joana Azeredo<sup>1*</sup>, Hauke Smidt<sup>2*</sup>
 
